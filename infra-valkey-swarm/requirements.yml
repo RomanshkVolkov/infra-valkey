@@ -1,0 +1,12 @@
+---
+# Instala con:  ansible-galaxy collection install -r requirements.yml -p ./collections
+# Versiones FIJADAS a propósito (pinning consciente).
+collections:
+  # Módulos docker_swarm, docker_secret, docker_stack, docker_container_exec,
+  # docker_swarm_service_info, docker_host_info, etc.
+  - name: community.docker
+    version: "3.13.0"
+
+  # Callback profile_tasks usado en ansible.cfg.
+  - name: ansible.posix
+    version: "1.6.2"

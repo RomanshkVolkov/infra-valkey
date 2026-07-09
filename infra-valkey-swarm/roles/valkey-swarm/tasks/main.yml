@@ -1,0 +1,61 @@
+---
+# =====================================================================
+# Role valkey-swarm — Valkey standalone en el Swarm local del VPS.
+#
+# NOTA arquitectónica: a diferencia del repo K8s, aquí NO hay Sentinel,
+# NI replicación, NI PodDisruptionBudget, NI NetworkPolicy. Es una única
+# instancia de caché por VPS; si el contenedor cae, Swarm lo reprograma
+# (restart_policy) pero la caché se vacía (es caché, no datos durables).
+# =====================================================================
+
+- name: "Crear directorio para el stack file"
+  ansible.builtin.file:
+    path: "{{ valkey_stack_file_remote | dirname }}"
+    state: directory
+    mode: "0750"
+
+- name: "Crear/asegurar el Docker secret con el password de Valkey"
+  community.docker.docker_secret:
+    name: "{{ valkey_secret_name }}"
+    # El módulo guarda un hash en una label para detectar cambios => idempotente.
+    # OJO: los secrets de Swarm son INMUTABLES; rotar el password requiere
+    # versionar el nombre (p. ej. valkey_password_v2) o force=true + redeploy.
+    data: "{{ vault_valkey_password }}"
+    state: present
+  no_log: true
+
+- name: "Renderizar el stack file en el host"
+  ansible.builtin.template:
+    src: "valkey-stack.yml.j2"
+    dest: "{{ valkey_stack_file_remote }}"
+    mode: "0640"
+
+- name: "Desplegar el stack de Valkey (docker stack deploy)"
+  # Usamos la CLI en lugar de community.docker.docker_stack para NO depender de
+  # la lib python `jsondiff` en el host (el módulo la exige; aquí no está y apt
+  # está bloqueado). `docker stack deploy` reconverge al compose => idempotente;
+  # --prune elimina servicios del stack que ya no estén en el compose.
+  ansible.builtin.command:
+    cmd: >-
+      docker stack deploy --detach=true --prune
+      -c {{ valkey_stack_file_remote }} {{ valkey_stack_name }}
+  register: stack_deploy
+  changed_when: true
+
+- name: "Esperar a que el servicio tenga su réplica corriendo (1/1)"
+  community.docker.docker_swarm_service_info:
+    name: "{{ valkey_stack_name }}_{{ valkey_service_name }}"
+  register: svc_info
+  until: >-
+    svc_info.service is not none
+    and (svc_info.service.Spec.Mode.Replicated.Replicas | default(0)) == 1
+  retries: "{{ valkey_wait_retries }}"
+  delay: "{{ valkey_wait_delay }}"
+
+- name: "Resumen del despliegue"
+  ansible.builtin.debug:
+    msg: >-
+      Valkey desplegado en {{ inventory_hostname }} como servicio
+      '{{ valkey_stack_name }}_{{ valkey_service_name }}'. Las apps locales
+      lo alcanzan vía DNS '{{ valkey_service_name }}:{{ valkey_port }}' uniéndose
+      a la red overlay '{{ valkey_network_name }}'.

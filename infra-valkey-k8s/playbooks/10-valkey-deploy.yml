@@ -1,0 +1,15 @@
+---
+# =====================================================================
+# 10-valkey-deploy.yml — Despliega Valkey (replicación + Sentinel) en `data`.
+#
+# Todo el trabajo k8s/helm lo hace el CONTROLADOR contra la API de k3s,
+# por eso delegamos a localhost y usamos `kubeconfig`.
+# =====================================================================
+- name: "Desplegar Valkey en Kubernetes"
+  hosts: k8s_nodes
+  gather_facts: false
+  run_once: true                 # un solo nodo: ejecutamos una vez
+  vars:
+    ansible_connection: local    # el role corre en el controlador
+  roles:
+    - role: valkey

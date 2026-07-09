@@ -1,0 +1,11 @@
+---
+# =====================================================================
+# 10-valkey-deploy.yml — Despliega Valkey standalone en cada VPS.
+# Corre POR HOST. Cada VPS obtiene su propia instancia local.
+# =====================================================================
+- name: "Desplegar Valkey en Docker Swarm (por VPS)"
+  hosts: swarm_nodes
+  gather_facts: true
+  become: true
+  roles:
+    - role: valkey-swarm

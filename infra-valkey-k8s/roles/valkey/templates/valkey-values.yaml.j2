@@ -1,0 +1,137 @@
+{# ===================================================================
+   values.yaml renderizado para el chart bitnami/valkey.
+   Comentarios explican cada bloque no obvio y sus trade-offs.
+   Parametrizado desde defaults/main.yml + group_vars.
+   =================================================================== #}
+---
+# ---- Arquitectura: replicación (1 primary + N réplicas) -------------
+architecture: replication
+
+# ---- Autenticación --------------------------------------------------
+auth:
+  enabled: true
+  # Referencia al Secret YA creado por Ansible (no dejamos que el chart
+  # genere uno propio, así controlamos el password desde el vault).
+  existingSecret: "{{ valkey_auth_secret_name }}"
+  existingSecretPasswordKey: "{{ valkey_auth_secret_key }}"
+
+{% if valkey_use_bitnamilegacy | default(false) | bool %}
+# ---- Imágenes legacy ------------------------------------------------
+# Bitnami movió las imágenes "free" a bitnamilegacy en 2025: docker.io/bitnami/*
+# devuelve 404 para los tags de este chart. Apuntamos a bitnamilegacy/* (mismas
+# imágenes, sin actualizaciones). `allowInsecureImages` desactiva la verificación
+# de "secure images" del chart, necesaria al usar un repositorio no oficial.
+global:
+  security:
+    allowInsecureImages: true
+image:
+  registry: docker.io
+  repository: bitnamilegacy/valkey
+kubectl:
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/kubectl
+volumePermissions:
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/os-shell
+{% endif %}
+
+# ---- Sentinel -------------------------------------------------------
+sentinel:
+  enabled: true
+{% if valkey_use_bitnamilegacy | default(false) | bool %}
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/valkey-sentinel
+{% endif %}
+  # Nombre del conjunto que usará el FailoverClient de la app.
+  # OJO: en el chart de Valkey la clave es `primarySet` (no `masterSet`, que
+  # es de Redis); con masterSet se ignoraba y quedaba el default `myprimary`.
+  primarySet: "{{ valkey_master_set_name }}"
+  quorum: {{ valkey_sentinel_quorum }}
+  # Tiempo sin respuesta del master antes de considerarlo caído (ms).
+  downAfterMilliseconds: {{ valkey_sentinel_down_after_ms }}
+  # El Service que agrupa los pods expone también 26379 (sentinel),
+  # de modo que valkey.data.svc.cluster.local:26379 es el endpoint sentinel.
+  service:
+    type: ClusterIP          # sin exposición externa
+
+# ---- Réplicas (en modo sentinel cada pod = valkey + sentinel) -------
+replica:
+  # 3 nodos => 1 master elegido + 2 réplicas. info replication mostrará
+  # role:master con connected_slaves:2.
+  replicaCount: {{ valkey_replica_count }}
+
+  # Persistencia DESACTIVADA: esto es caché puro. Sin PVCs, sin AOF/RDB.
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: "{{ valkey_resources.requests.cpu }}"
+      memory: "{{ valkey_resources.requests.memory }}"
+    limits:
+      cpu: "{{ valkey_resources.limits.cpu }}"
+      memory: "{{ valkey_resources.limits.memory }}"
+
+  # Anti-afinidad entre pods de Valkey.
+  #  - "soft": preferencia (no obligatorio). Necesario en NODO ÚNICO,
+  #    porque "hard" exigiría 3 nodos distintos y dejaría pods en Pending.
+  #  - "hard": cámbialo SOLO cuando tengas >=3 nodos worker reales, para
+  #    garantizar tolerancia a fallo de nodo.
+  podAntiAffinityPreset: "{{ valkey_pod_anti_affinity_preset }}"
+
+  # PodDisruptionBudget: protege la disponibilidad durante drains/upgrades.
+  pdb:
+    create: true
+    minAvailable: {{ valkey_pdb_min_available }}
+
+# ---- Configuración común de Valkey (maxmemory + caché) --------------
+# Se inyecta en valkey.conf de todos los nodos. allkeys-lru => evicción
+# por LRU sobre todas las claves cuando se alcanza maxmemory.
+commonConfiguration: |-
+  maxmemory {{ valkey_maxmemory }}
+  maxmemory-policy {{ valkey_maxmemory_policy }}
+  # Refuerzo de "sin persistencia": desactivamos snapshots y AOF.
+  appendonly no
+  save ""
+
+# ---- TLS ------------------------------------------------------------
+# Desactivado: el tráfico es interno al clúster (ClusterIP + NetworkPolicy).
+# Si algún día expones Valkey fuera del clúster, habilita TLS aquí.
+tls:
+  enabled: false
+
+# ---- Service principal (datos) --------------------------------------
+service:
+  type: ClusterIP            # sin NodePort ni LoadBalancer
+
+# ---- Métricas Prometheus (condicional) ------------------------------
+metrics:
+  # El exporter sidecar se habilita siempre que quieras métricas; el
+  # ServiceMonitor solo tiene sentido si el Prometheus Operator existe.
+  enabled: {{ prometheus_operator_installed | bool | lower }}
+{% if valkey_use_bitnamilegacy | default(false) | bool %}
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis-exporter
+{% endif %}
+{% if prometheus_operator_installed | bool %}
+  serviceMonitor:
+    enabled: true
+    namespace: "{{ valkey_namespace }}"
+    # Ajusta labels/selector según tu instalación de kube-prometheus-stack.
+    # labels:
+    #   release: kube-prometheus-stack
+{% else %}
+  # prometheus_operator_installed=false => sin ServiceMonitor (no existe el CRD).
+{% endif %}
+
+# ---- Notas de imagen ------------------------------------------------
+# Si el pull de la imagen Bitnami falla (catálogo "secure images"), define
+# aquí el repositorio legacy. Ver troubleshooting del README:
+# image:
+#   registry: docker.io
+#   repository: bitnamilegacy/valkey
+# sentinel.image / metrics.image análogos.

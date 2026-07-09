@@ -1,0 +1,64 @@
+---
+# =====================================================================
+# 00-prereqs.yml — Asegura prerrequisitos en el NODO y en el clúster.
+#
+# Qué hace:
+#   - Instala Helm 3 en el nodo si falta (idempotente, vía script oficial).
+#   - Registra/actualiza el repo Helm de Bitnami contra el clúster.
+#
+# NOTA: la collection kubernetes.core y las libs Python (kubernetes, pyyaml)
+# se instalan en el CONTROLADOR, no aquí. Ver README (.venv + requirements).
+# =====================================================================
+
+# ---- Parte 1: Helm en el NODO (conexión SSH) ------------------------
+# Solo si helm_on_controller=false. Por defecto helm corre en el CONTROLADOR
+# (tu laptop), así que esta parte se SALTA por completo y NO se conecta por SSH
+# (gather_facts: false + el when del bloque evitan tocar el nodo).
+- name: "Prereqs en el nodo (Helm 3)"
+  hosts: k8s_nodes
+  gather_facts: false
+  become: true
+  tasks:
+    - name: "Instalar/verificar Helm en el nodo"
+      when: not (helm_on_controller | default(true) | bool)
+      block:
+        - name: "Comprobar si helm ya está instalado"
+          ansible.builtin.command: "helm version --short"
+          register: helm_check
+          changed_when: false
+          failed_when: false          # no es error que no exista todavía
+
+        - name: "Instalar Helm 3 (script oficial) si no está presente"
+          # Único uso justificado de shell: el instalador oficial de Helm no tiene
+          # módulo nativo equivalente. Idempotente por el `creates`.
+          ansible.builtin.shell:
+            cmd: "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+          args:
+            creates: "/usr/local/bin/helm"
+          when: helm_check.rc != 0
+
+        - name: "Mostrar versión de Helm"
+          ansible.builtin.command: "helm version --short"
+          register: helm_final
+          changed_when: false
+
+        - name: "Helm disponible"
+          ansible.builtin.debug:
+            msg: "Helm en el nodo: {{ helm_final.stdout }}"
+
+# ---- Parte 2: repo Helm contra el CLÚSTER (controlador -> API) ------
+- name: "Prereqs de clúster (repo Helm Bitnami)"
+  hosts: k8s_nodes
+  gather_facts: false
+  # delegate_to: localhost  -> el módulo helm_repository actúa con el helm
+  # del controlador. Si prefieres usar el helm del nodo, quita run_once/
+  # delegate y deja que corra por SSH. Aquí lo hacemos desde el controlador.
+  tasks:
+    - name: "Añadir/actualizar repo Helm de Bitnami"
+      kubernetes.core.helm_repository:
+        name: "{{ valkey_chart_repo_name }}"
+        repo_url: "{{ valkey_chart_repo_url }}"
+        # force_update asegura idempotencia si la URL cambió.
+        force_update: true
+      delegate_to: localhost
+      run_once: true

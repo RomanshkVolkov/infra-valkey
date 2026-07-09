@@ -1,0 +1,17 @@
+---
+# Instala con:  ansible-galaxy collection install -r requirements.yml -p ./collections
+# Versiones FIJADAS a propósito (la restricción del proyecto exige pinning).
+# Sube estas versiones de forma consciente, no automática.
+collections:
+  # Módulos k8s, helm, helm_repository, k8s_info, k8s_exec, etc.
+  - name: kubernetes.core
+    version: "5.0.0"
+
+  # Provee el callback profile_tasks usado en ansible.cfg y utilidades varias.
+  - name: ansible.posix
+    version: "1.6.2"
+
+  # Solo necesaria si más adelante automatizas los VPS de Swarm (ver README).
+  # Se deja comentada para no obligar a instalarla en este flujo de K8s.
+  # - name: community.docker
+  #   version: "3.13.0"

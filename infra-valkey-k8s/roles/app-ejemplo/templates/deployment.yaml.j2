@@ -1,0 +1,83 @@
+{# Deployment + Service de la app de ejemplo (cache-aside) en `production`. #}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ app_name }}
+  namespace: {{ apps_namespace }}
+  labels:
+    app: {{ app_name }}
+spec:
+  replicas: {{ app_replicas }}
+  selector:
+    matchLabels:
+      app: {{ app_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ app_name }}
+    spec:
+      containers:
+        - name: {{ app_name }}
+          image: "{{ app_image }}"        # FIJA por tag/digest (ver defaults)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ app_container_port }}
+          env:
+            # Endpoint Sentinel + nombre del master para el FailoverClient.
+            - name: VALKEY_SENTINEL_ADDR
+              value: "{{ valkey_sentinel_addr }}"
+            - name: VALKEY_MASTER_NAME
+              value: "{{ valkey_master_set_name }}"
+            - name: HTTP_ADDR
+              value: ":{{ app_container_port }}"
+            # Password leído del Secret replicado (NUNCA en texto plano aquí).
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ valkey_auth_secret_name }}
+                  key: {{ valkey_auth_secret_key }}
+          # Sondas: la app expone /healthz (hace PING a Valkey).
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ app_container_port }}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ app_container_port }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "64Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532          # usuario 'nonroot' de la imagen distroless
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ app_name }}
+  namespace: {{ apps_namespace }}
+  labels:
+    app: {{ app_name }}
+spec:
+  type: ClusterIP                       # interno; no se expone fuera del clúster
+  selector:
+    app: {{ app_name }}
+  ports:
+    - name: http
+      port: {{ app_container_port }}
+      targetPort: {{ app_container_port }}
+      protocol: TCP

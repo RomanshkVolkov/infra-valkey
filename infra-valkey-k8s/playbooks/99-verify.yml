@@ -1,0 +1,214 @@
+---
+# =====================================================================
+# 99-verify.yml — Checklist post-deploy AUTOMATIZADA.
+#
+# Cada bloque falla (assert / failed_when) si algo no cuadra y muestra un
+# mensaje claro de éxito/fallo. Es idempotente: solo lee y comprueba.
+# =====================================================================
+- name: "Verificación post-deploy"
+  hosts: k8s_nodes
+  gather_facts: false
+  run_once: true
+  vars:
+    ansible_connection: local
+    # Password para valkey-cli dentro del pod. OJO: NO la llamamos
+    # `valkey_password` porque `vault_valkey_password` se deriva de esa var
+    # (config.yml) y crearía un bucle recursivo de templating.
+    vk_password: "{{ vault_valkey_password }}"
+  tasks:
+
+    # ---------- 1) Pods de Valkey Running y Ready ----------
+    - name: "Leer pods de Valkey"
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Pod
+        namespace: "{{ valkey_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=valkey"
+      register: valkey_pods
+
+    - name: "Comprobar 3 pods de Valkey Running"
+      vars:
+        running: "{{ valkey_pods.resources | selectattr('status.phase', 'equalto', 'Running') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "running | length == 3"
+        success_msg: "OK: 3 pods de Valkey en Running."
+        fail_msg: "FALLO: se esperaban 3 pods Running, hay {{ running | length }}."
+
+    - name: "Comprobar que cada pod de Valkey está Ready"
+      vars:
+        ready_count: >-
+          {{ valkey_pods.resources
+             | map(attribute='status.conditions', default=[])
+             | map('selectattr', 'type', 'equalto', 'Ready')
+             | map('map', attribute='status')
+             | map('select', 'equalto', 'True')
+             | map('list') | map('length') | select('gt', 0) | list | length }}
+      ansible.builtin.assert:
+        that:
+          - "ready_count | int == 3"
+        success_msg: "OK: los 3 pods de Valkey están Ready."
+        fail_msg: "FALLO: pods Ready = {{ ready_count }} (esperado 3)."
+
+    # ---------- 2) Sentinels Running ----------
+    # En el chart de Bitnami con sentinel, cada pod corre 2 contenedores:
+    # 'valkey' y 'valkey-sentinel'. 3 pods Running => 3 sentinels.
+    - name: "Comprobar contenedores sentinel arriba"
+      vars:
+        sentinels_ready: >-
+          {{ valkey_pods.resources
+             | map(attribute='status.containerStatuses', default=[])
+             | map('selectattr', 'name', 'search', 'sentinel')
+             | map('selectattr', 'ready', 'equalto', true)
+             | map('list') | map('length') | select('gt', 0) | list | length }}
+      ansible.builtin.assert:
+        that:
+          - "sentinels_ready | int == 3"
+        success_msg: "OK: 3 contenedores sentinel Ready."
+        fail_msg: "FALLO: sentinels Ready = {{ sentinels_ready }} (esperado 3)."
+
+    - name: "Elegir un pod de Valkey para los exec"
+      ansible.builtin.set_fact:
+        target_pod: "{{ (valkey_pods.resources | first).metadata.name }}"
+
+    # ---------- 3) valkey-cli ping => PONG ----------
+    - name: "valkey-cli ping"
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ kubeconfig }}"
+        namespace: "{{ valkey_namespace }}"
+        pod: "{{ target_pod }}"
+        container: valkey
+        # -a pasa el password; 2>/dev/null evita el warning de auth en stderr.
+        command: >-
+          sh -c "valkey-cli -a '{{ vk_password }}' --no-auth-warning ping"
+      register: ping_out
+      changed_when: false
+
+    - name: "Comprobar PONG"
+      ansible.builtin.assert:
+        that:
+          - "'PONG' in ping_out.stdout"
+        success_msg: "OK: ping responde PONG."
+        fail_msg: "FALLO: ping no devolvió PONG -> {{ ping_out.stdout | default('') }}"
+
+    # ---------- 4) info replication: role:master + 2 slaves ----------
+    - name: "Buscar el master vía cualquier pod (info replication)"
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ kubeconfig }}"
+        namespace: "{{ valkey_namespace }}"
+        pod: "{{ item }}"
+        container: valkey
+        command: >-
+          sh -c "valkey-cli -a '{{ vk_password }}' --no-auth-warning info replication"
+      register: repl_out
+      changed_when: false
+      loop: "{{ valkey_pods.resources | map(attribute='metadata.name') | list }}"
+
+    - name: "Comprobar role:master con 2 connected_slaves en algún pod"
+      vars:
+        master_results: >-
+          {{ repl_out.results
+             | selectattr('stdout', 'search', 'role:master')
+             | selectattr('stdout', 'search', 'connected_slaves:2')
+             | list }}
+      ansible.builtin.assert:
+        that:
+          - "master_results | length == 1"
+        success_msg: "OK: hay 1 master con 2 connected_slaves."
+        fail_msg: "FALLO: no se encontró exactamente 1 master con 2 connected_slaves."
+
+    # ---------- 5) sentinel masters ----------
+    - name: "Consultar sentinel masters"
+      kubernetes.core.k8s_exec:
+        kubeconfig: "{{ kubeconfig }}"
+        namespace: "{{ valkey_namespace }}"
+        pod: "{{ target_pod }}"
+        container: sentinel
+        command: >-
+          sh -c "valkey-cli -p 26379 -a '{{ vk_password }}' --no-auth-warning sentinel master {{ valkey_master_set_name }}"
+      register: sentinel_out
+      changed_when: false
+
+    - name: "Comprobar num-slaves=2 y num-other-sentinels=2"
+      vars:
+        # La salida de 'sentinel master' es una lista clave\nvalor.
+        lines: "{{ sentinel_out.stdout_lines }}"
+        num_slaves: "{{ lines[(lines.index('num-slaves') + 1)] if 'num-slaves' in lines else '-1' }}"
+        num_other: "{{ lines[(lines.index('num-other-sentinels') + 1)] if 'num-other-sentinels' in lines else '-1' }}"
+      ansible.builtin.assert:
+        that:
+          - "num_slaves | int == 2"
+          - "num_other | int == 2"
+        success_msg: "OK: sentinel ve num-slaves=2 y num-other-sentinels=2."
+        fail_msg: "FALLO: sentinel num-slaves={{ num_slaves }}, num-other-sentinels={{ num_other }} (esperado 2 y 2)."
+
+    # ---------- 6) App de ejemplo (OPCIONAL) ----------
+    # Solo se verifica si la demo está activada (deploy_app_ejemplo=true).
+    # Exec al propio pod de la app con su binario como cliente HTTP contra
+    # 127.0.0.1:8080 (la imagen distroless no trae shell).
+    - name: "Verificación de la app de ejemplo (cache-aside)"
+      when: deploy_app_ejemplo | default(false) | bool
+      block:
+        - name: "Leer un pod de la app"
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ kubeconfig }}"
+            kind: Pod
+            namespace: "{{ apps_namespace }}"
+            label_selectors:
+              - "app=app-ejemplo"
+            field_selectors:
+              - "status.phase=Running"
+          register: app_pods
+
+        - name: "Asegurar que hay al menos un pod de app corriendo"
+          ansible.builtin.assert:
+            that:
+              - "app_pods.resources | length >= 1"
+            success_msg: "OK: app-ejemplo tiene pods Running."
+            fail_msg: "FALLO: no hay pods Running de app-ejemplo."
+
+        - name: "Fijar pod de app objetivo"
+          ansible.builtin.set_fact:
+            app_pod: "{{ (app_pods.resources | first).metadata.name }}"
+
+        - name: "GET /usuario/1 (primera vez = MISS, mide latencia ms)"
+          kubernetes.core.k8s_exec:
+            kubeconfig: "{{ kubeconfig }}"
+            namespace: "{{ apps_namespace }}"
+            pod: "{{ app_pod }}"
+            command: >-
+              /app/app-ejemplo -probe http://127.0.0.1:8080/usuario/99001
+          register: app_miss
+          changed_when: false
+
+        - name: "GET /usuario/1 (segunda vez = HIT)"
+          kubernetes.core.k8s_exec:
+            kubeconfig: "{{ kubeconfig }}"
+            namespace: "{{ apps_namespace }}"
+            pod: "{{ app_pod }}"
+            command: >-
+              /app/app-ejemplo -probe http://127.0.0.1:8080/usuario/99001
+          register: app_hit
+          changed_when: false
+
+        - name: "Comprobar HTTP 200 y cache MISS->HIT con latencias coherentes"
+          vars:
+            miss: "{{ app_miss.stdout | from_json }}"
+            hit: "{{ app_hit.stdout | from_json }}"
+          ansible.builtin.assert:
+            that:
+              - "miss.status == 200"
+              - "hit.status == 200"
+              - "miss.cache == 'miss'"
+              - "hit.cache == 'hit'"
+              - "miss.latency_ms | int >= 45"   # ~50ms simulando BD
+              - "hit.latency_ms | int < 15"     # caché, mucho más rápido
+            success_msg: "OK: app 200. MISS={{ miss.latency_ms }}ms, HIT={{ hit.latency_ms }}ms."
+            fail_msg: "FALLO: MISS={{ miss.latency_ms | default('?') }}ms ({{ miss.cache | default('?') }}), HIT={{ hit.latency_ms | default('?') }}ms ({{ hit.cache | default('?') }})."
+
+    - name: "Resumen final"
+      ansible.builtin.debug:
+        msg: >-
+          TODAS LAS VERIFICACIONES PASARON ✔
+          {{ '(incluida la app de ejemplo)' if (deploy_app_ejemplo | default(false) | bool) else '(Valkey; app de ejemplo desactivada)' }}

@@ -1,0 +1,48 @@
+{# Stack de Docker Swarm para Valkey standalone (caché puro). #}
+version: "3.8"
+
+services:
+  {{ valkey_service_name }}:
+    image: "{{ valkey_image }}"
+    # Imagen Bitnami: lee el password de un archivo (el secret montado) y
+    # admite flags extra. Así el password NO viaja en la línea de comandos
+    # (no aparece en `docker service inspect` ni en `ps`).
+    environment:
+      - VALKEY_PASSWORD_FILE=/run/secrets/{{ valkey_secret_name }}
+      - ALLOW_EMPTY_PASSWORD=no
+      # Caché puro: límite de memoria + evicción LRU, sin persistencia.
+      - VALKEY_EXTRA_FLAGS=--maxmemory {{ valkey_maxmemory }} --maxmemory-policy {{ valkey_maxmemory_policy }} --appendonly no --save ""
+    secrets:
+      - {{ valkey_secret_name }}
+    networks:
+      - {{ valkey_network_name }}
+    # SIN volumes => sin persistencia (al recrear el contenedor, caché vacía).
+    deploy:
+      mode: replicated
+      replicas: 1                 # standalone: una sola instancia por VPS
+      restart_policy:
+        condition: any            # Swarm la reprograma si cae
+        delay: 5s
+      update_config:
+        order: stop-first         # equivalente "ligero" a un control de disrupción
+      resources:
+        limits:
+          cpus: "{{ valkey_cpu_limit }}"
+          memory: {{ valkey_mem_limit }}
+        reservations:
+          cpus: "{{ valkey_cpu_reservation }}"
+          memory: {{ valkey_mem_reservation }}
+
+networks:
+  {{ valkey_network_name }}:
+    driver: overlay
+    # internal: sin gateway hacia el exterior (no se expone fuera del host).
+    internal: true
+    # attachable: permite que el stack de tu app (desplegado aparte) se una a
+    # esta red y resuelva 'valkey:6379'. Si app y valkey van en el MISMO stack,
+    # podrías poner attachable: false.
+    attachable: true
+
+secrets:
+  {{ valkey_secret_name }}:
+    external: true                # creado por Ansible (community.docker.docker_secret)

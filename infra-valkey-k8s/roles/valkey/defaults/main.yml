@@ -1,0 +1,49 @@
+---
+# =====================================================================
+# Defaults del role valkey. Valores razonables que group_vars/all/vars.yml
+# (o el inventario) pueden sobreescribir. NO poner secrets aquí.
+# =====================================================================
+
+# Namespaces
+valkey_namespace: "data"
+apps_namespace: "production"
+
+# Helm / chart
+valkey_chart_repo_name: "bitnami"
+valkey_chart_repo_url: "https://charts.bitnami.com/bitnami"
+valkey_chart_name: "bitnami/valkey"
+valkey_chart_version: "3.0.20"          # FIJA; verifica con `helm search repo`
+valkey_release_name: "valkey"
+# true => usa imágenes bitnamilegacy/* (Bitnami retiró las "free" de bitnami/*
+# en 2025; los tags de este chart dan 404). Ver README troubleshooting.
+valkey_use_bitnamilegacy: false
+
+# Auth (Secret existente referenciado por el chart)
+valkey_auth_secret_name: "valkey-auth"
+valkey_auth_secret_key: "valkey-password"
+
+# Topología / Sentinel
+valkey_replica_count: 3
+valkey_sentinel_quorum: 2
+valkey_sentinel_down_after_ms: 60000
+valkey_master_set_name: "mymaster"
+
+# Memoria / caché. La fuente única es `valkey_maxmemory_mb` (en config.yml);
+# `valkey_maxmemory` y `valkey_resources` se DERIVAN en group_vars/all/vars.yml.
+# Aquí solo dejamos un fallback por si el role se usara suelto.
+valkey_maxmemory_mb: 700
+valkey_maxmemory_policy: "allkeys-lru"
+
+# Disponibilidad
+valkey_pod_anti_affinity_preset: "soft"   # "hard" solo con >=3 nodos reales
+valkey_pdb_min_available: 1
+
+# Observabilidad
+prometheus_operator_installed: false
+
+# Espera de readiness (retry loop razonable: 30 intentos x 10s = 5 min)
+valkey_wait_retries: 30
+valkey_wait_delay: 10
+
+# Ruta temporal del values renderizado (en el controlador)
+valkey_values_tmp: "/tmp/valkey-values.{{ valkey_release_name }}.yaml"

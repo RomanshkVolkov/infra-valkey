@@ -1,0 +1,73 @@
+---
+# =====================================================================
+# 99-verify.yml — Verificación post-deploy por VPS.
+# Comprueba que el servicio corre y que Valkey responde PONG.
+# (No hay replicación/sentinel que verificar: es standalone.)
+# =====================================================================
+- name: "Verificación de Valkey en Swarm"
+  hosts: swarm_nodes
+  gather_facts: false
+  become: true
+  tasks:
+
+    - name: "Leer info del servicio Valkey"
+      community.docker.docker_swarm_service_info:
+        name: "{{ valkey_stack_name }}_{{ valkey_service_name }}"
+      register: svc
+
+    - name: "Comprobar que el servicio existe con 1 réplica deseada"
+      ansible.builtin.assert:
+        that:
+          - "svc.service is not none"
+          - "(svc.service.Spec.Mode.Replicated.Replicas | default(0)) == 1"
+        success_msg: "OK: servicio {{ valkey_stack_name }}_{{ valkey_service_name }} con 1 réplica."
+        fail_msg: "FALLO: el servicio no existe o no tiene 1 réplica."
+
+    - name: "Localizar el contenedor de la tarea Valkey"
+      community.docker.docker_host_info:
+        containers: true
+        containers_filters:
+          label: "com.docker.swarm.service.name={{ valkey_stack_name }}_{{ valkey_service_name }}"
+      register: host_info
+
+    - name: "Comprobar que hay un contenedor corriendo"
+      ansible.builtin.assert:
+        that:
+          - "host_info.containers | length >= 1"
+        success_msg: "OK: contenedor de Valkey en ejecución."
+        fail_msg: "FALLO: no se encontró contenedor de la tarea Valkey."
+
+    - name: "valkey-cli ping (auth vía secret montado)"
+      community.docker.docker_container_exec:
+        container: "{{ host_info.containers[0].Id }}"
+        # El password se lee del archivo del secret => no aparece en el comando.
+        command: >-
+          sh -c "valkey-cli -a \"$(cat /run/secrets/{{ valkey_secret_name }})\" --no-auth-warning ping"
+      register: ping_out
+      changed_when: false
+
+    - name: "Comprobar PONG"
+      ansible.builtin.assert:
+        that:
+          - "'PONG' in ping_out.stdout"
+        success_msg: "OK: Valkey responde PONG en {{ inventory_hostname }}."
+        fail_msg: "FALLO: ping no devolvió PONG -> {{ ping_out.stdout | default('') }}"
+
+    - name: "Comprobar maxmemory-policy aplicada"
+      community.docker.docker_container_exec:
+        container: "{{ host_info.containers[0].Id }}"
+        command: >-
+          sh -c "valkey-cli -a \"$(cat /run/secrets/{{ valkey_secret_name }})\" --no-auth-warning config get maxmemory-policy"
+      register: policy_out
+      changed_when: false
+
+    - name: "Verificar política allkeys-lru"
+      ansible.builtin.assert:
+        that:
+          - "valkey_maxmemory_policy in policy_out.stdout"
+        success_msg: "OK: maxmemory-policy = {{ valkey_maxmemory_policy }}."
+        fail_msg: "FALLO: maxmemory-policy inesperada -> {{ policy_out.stdout }}"
+
+    - name: "Resumen"
+      ansible.builtin.debug:
+        msg: "VERIFICACIÓN OK en {{ inventory_hostname }} ✔"

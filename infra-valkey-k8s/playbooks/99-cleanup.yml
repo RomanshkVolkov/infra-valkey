@@ -1,0 +1,63 @@
+---
+# =====================================================================
+# 99-cleanup.yml — Desinstalación limpia (app + Valkey + namespaces).
+#
+# Idempotente: usa state=absent / helm uninstall, que no fallan si el
+# recurso ya no existe. No hay PVCs que limpiar (persistencia desactivada).
+#
+#   ansible-playbook playbooks/99-cleanup.yml     (o: make clean)
+# =====================================================================
+- name: "Desinstalar el stack de Valkey"
+  hosts: k8s_nodes
+  gather_facts: false
+  run_once: true
+  vars:
+    ansible_connection: local
+  tasks:
+    - name: "Borrar Deployment + Service de la app"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ apps_namespace }}"
+        name: "{{ item.name }}"
+      loop:
+        - { api: "apps/v1", kind: "Deployment", name: "app-ejemplo" }
+        - { api: "v1", kind: "Service", name: "app-ejemplo" }
+        - { api: "v1", kind: "Secret", name: "{{ valkey_auth_secret_name }}" }
+
+    - name: "Desinstalar el release de Helm de Valkey"
+      kubernetes.core.helm:
+        kubeconfig: "{{ kubeconfig }}"
+        name: "{{ valkey_release_name }}"
+        release_namespace: "{{ valkey_namespace }}"
+        state: absent
+        wait: true
+
+    - name: "Borrar recursos sueltos del namespace data"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ valkey_namespace }}"
+        name: "{{ item.name }}"
+      loop:
+        - { api: "v1", kind: "Secret", name: "{{ valkey_auth_secret_name }}" }
+        - { api: "networking.k8s.io/v1", kind: "NetworkPolicy", name: "valkey-allow-clients-and-internal" }
+
+    - name: "Borrar los namespaces data y production"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ item }}"
+      loop:
+        - "{{ valkey_namespace }}"
+        - "{{ apps_namespace }}"
+
+    - name: "Resumen"
+      ansible.builtin.debug:
+        msg: "Stack de Valkey desinstalado (namespaces {{ valkey_namespace }} y {{ apps_namespace }} eliminados)."

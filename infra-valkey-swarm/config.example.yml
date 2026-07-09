@@ -1,0 +1,37 @@
+---
+# =====================================================================
+# config.yml — ÚNICO archivo a editar para desplegar Valkey (standalone)
+# en un VPS con Docker Swarm.
+#
+#   make config   # copia esta plantilla a inventory/group_vars/all/config.yml
+#   <edítalo>     # alias SSH (o IP), imagen, memoria
+#   make deploy   # despliega Valkey + verificación, con un comando
+#
+# Los módulos community.docker corren EN el VPS por SSH (no en tu laptop).
+# =====================================================================
+
+# ---- Conexión al VPS (SSH) ------------------------------------------
+# Opción A (recomendada si ya tienes un Host en ~/.ssh/config que funcione):
+node_ssh_alias: ""              # p.ej. "boaty"  (trae HostName/Port/User/clave)
+# Opción B (explícita; ignorada si pones node_ssh_alias):
+node_ip: "203.0.113.21"
+node_ssh_port: 22
+node_user: "root"
+# IP que el swarm anuncia a otros nodos (en nodo único = la propia IP del VPS).
+swarm_advertise_addr: ""        # vacío => usa node_ip
+
+# ---- Imagen de Valkey -----------------------------------------------
+# Bitnami movió las imágenes "free" a bitnamilegacy en 2025 (bitnami/valkey
+# devuelve 404). Verifica tags con: docker run --rm bitnamilegacy/valkey:TAG ...
+valkey_image: "bitnamilegacy/valkey:8.1.3-debian-12-r1"
+
+# ---- Memoria (caché puro, sin persistencia) -------------------------
+# UNA sola instancia por VPS (no hay replicación). El límite de memoria del
+# contenedor se deriva de este número (~1.3x), así que solo tocas esto.
+valkey_maxmemory_mb: 512
+
+# ---- Password -------------------------------------------------------
+#   - Vacío ("") => se autogenera uno fuerte y se guarda en .valkey_password
+#     (gitignored) y se reutiliza. RECOMENDADO.
+#   - O pon tu propio password.
+valkey_password: ""

@@ -1,0 +1,16 @@
+# Referencia cruda (NO se aplica directamente; Ansible crea los namespaces).
+# Útil para inspección manual o `kubectl apply -f` en debugging.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  labels:
+    name: data        # usada por selección por namespace
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    name: production  # IMPRESCINDIBLE para que la NetworkPolicy permita ingress

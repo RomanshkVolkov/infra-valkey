@@ -1,0 +1,47 @@
+{# ===================================================================
+   NetworkPolicy para Valkey, renderizada desde variables.
+   Los namespaces (valkey_namespace / apps_namespace) son configurables
+   desde config.yml; aquí se inyectan, ya no hay valores fijos.
+
+   Modelo: default-deny de ingress sobre los pods de Valkey, con dos
+   excepciones:
+     1) Tráfico desde el namespace consumidor (apps_namespace) a 6379/26379.
+     2) Tráfico entre los propios pods de Valkey/Sentinel (replicación + gossip).
+
+   Seleccionamos el namespace consumidor por la label automática
+   `kubernetes.io/metadata.name` (la añade k8s >=1.21 a TODOS los namespaces),
+   así funciona con cualquiera —incluido "default"— sin etiquetarlo a mano.
+
+   REQUISITO: el CNI debe soportar NetworkPolicy. El flannel por defecto de
+   k3s NO las aplica (las reglas se crean pero se ignoran); instala Calico u
+   otro CNI compatible para que surtan efecto. Ver troubleshooting del README.
+   =================================================================== #}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: valkey-allow-clients-and-internal
+  namespace: {{ valkey_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: valkey
+  policyTypes:
+    - Ingress
+  ingress:
+    # (1) Apps del namespace consumidor -> 6379 (datos) y 26379 (sentinel)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ apps_namespace }}
+      ports:
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 26379 }
+    # (2) Tráfico entre los propios pods de Valkey/Sentinel (mismo namespace)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: valkey
+      ports:
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 26379 }

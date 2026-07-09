@@ -1,0 +1,16 @@
+# Config REAL del despliegue: nunca se versiona (solo config.example.yml).
+inventory/group_vars/all/config.yml
+
+# Password de Valkey autogenerado (cuando valkey_password se deja vacío).
+.valkey_password
+
+# Vault REAL cifrado (opcional): nunca se versiona.
+inventory/group_vars/all/vault.yml
+
+# Collections instaladas localmente.
+collections/
+
+# Entorno virtual de Python del controlador.
+.venv/
+
+*.retry

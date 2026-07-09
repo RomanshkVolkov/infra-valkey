@@ -1,0 +1,61 @@
+---
+# =====================================================================
+# Constantes internas / derivadas. NO necesitas editar esto para un
+# despliegue normal: todo lo que sueles cambiar (conexión, imagen, versión
+# del chart, password, memoria...) vive en group_vars/all/config.yml.
+# =====================================================================
+
+# ---- Password de Valkey (derivado de config.yml) --------------------
+# - Si `valkey_password` (en config.yml) tiene valor, se usa.
+# - Si está vacío, se autogenera un password fuerte la PRIMERA vez y se
+#   guarda en .valkey_password (gitignored, a la raíz del repo); las
+#   ejecuciones siguientes reutilizan el mismo => idempotente y sin teclear
+#   nada. Solo letras y dígitos para no romper `valkey-cli -a`.
+vault_valkey_password: >-
+  {{ valkey_password
+     if (valkey_password | default('') | trim | length > 0)
+     else lookup('ansible.builtin.password',
+                 inventory_dir ~ '/../.valkey_password length=32 chars=ascii_letters,digits') }}
+
+# ---- Namespaces ------------------------------------------------------
+# (Se definen en config.yml: valkey_namespace y apps_namespace.)
+
+# ---- Helm / chart ----------------------------------------------------
+# El repo y el nombre del chart son fijos; la VERSIÓN se ajusta en config.yml
+# (valkey_chart_version). Verifica versiones reales con:
+#   helm search repo bitnami/valkey --versions
+valkey_chart_repo_name: "bitnami"
+valkey_chart_repo_url: "https://charts.bitnami.com/bitnami"
+valkey_chart_name: "bitnami/valkey"
+valkey_release_name: "valkey"     # => Service DNS: <release>.<valkey_namespace>.svc.cluster.local
+
+# ---- Auth ------------------------------------------------------------
+valkey_auth_secret_name: "valkey-auth"   # Secret existente referenciado por el chart
+valkey_auth_secret_key: "valkey-password" # clave dentro del Secret
+
+# ---- Topología / Sentinel -------------------------------------------
+# En modo sentinel de Bitnami cada pod corre valkey+sentinel.
+# 3 nodos => 1 master + 2 réplicas + 3 sentinels.
+valkey_replica_count: 3
+valkey_sentinel_quorum: 2
+valkey_sentinel_down_after_ms: 60000     # 60s antes de declarar caído al master
+valkey_master_set_name: "myprimary"      # nombre del primary set (default del chart Valkey)
+
+# ---- Memoria / caché (derivado de valkey_maxmemory_mb en config.yml) ----
+# Un único número en config.yml controla la caché Y el límite del pod, para
+# que NUNCA queden incoherentes (el límite siempre > maxmemory => sin OOM).
+valkey_maxmemory: "{{ valkey_maxmemory_mb | default(700) }}mb"
+valkey_maxmemory_policy: "allkeys-lru"
+
+valkey_resources:
+  requests:
+    cpu: "100m"
+    # ~50% de maxmemory como reserva inicial.
+    memory: "{{ (valkey_maxmemory_mb | default(700) | float * 0.5) | round(0, 'ceil') | int }}Mi"
+  limits:
+    cpu: "500m"
+    # ~1.3x maxmemory: headroom para fragmentación y buffers de replicación.
+    memory: "{{ (valkey_maxmemory_mb | default(700) | float * 1.3) | round(0, 'ceil') | int }}Mi"
+
+# ---- Disponibilidad --------------------------------------------------
+valkey_pdb_min_available: 1               # con 3 pods, tolera perder hasta 2

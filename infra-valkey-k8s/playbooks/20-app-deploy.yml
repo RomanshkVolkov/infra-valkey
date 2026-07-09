@@ -1,0 +1,22 @@
+---
+# =====================================================================
+# 20-app-deploy.yml — Despliega la app de ejemplo en `production`.
+#
+# OPCIONAL: solo se ejecuta si `deploy_app_ejemplo: true` en config.yml.
+# Replica el Secret de auth de `data` a `production` y crea Deployment+Service.
+# La imagen Docker se asume YA publicada (ver var app_image y README).
+# =====================================================================
+- name: "Desplegar app de ejemplo (cache-aside)"
+  hosts: k8s_nodes
+  gather_facts: false
+  run_once: true
+  vars:
+    ansible_connection: local
+  tasks:
+    - name: "App de ejemplo desactivada (deploy_app_ejemplo=false)"
+      ansible.builtin.debug:
+        msg: "Saltando app-ejemplo. Ponla a true en config.yml si quieres la demo."
+      when: not (deploy_app_ejemplo | default(false) | bool)
+  roles:
+    - role: app-ejemplo
+      when: deploy_app_ejemplo | default(false) | bool

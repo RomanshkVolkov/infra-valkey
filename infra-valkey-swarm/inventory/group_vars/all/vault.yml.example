@@ -1,0 +1,12 @@
+---
+# PLANTILLA (sin cifrar) — solo para mostrar la estructura.
+# Crea el real cifrado:
+#   openssl rand -base64 32                          # genera password
+#   ansible-vault create group_vars/all/vault.yml    # pega la variable de abajo
+#
+# El vault REAL (group_vars/all/vault.yml) está en .gitignore.
+#
+# NOTA: aquí cada VPS tiene su propio Valkey independiente. Puedes usar el
+# MISMO password para todos (simple) o uno por host con hostvars. Por defecto,
+# uno compartido:
+vault_valkey_password: "REEMPLAZA_CON_LA_SALIDA_DE_openssl_rand_base64_32"

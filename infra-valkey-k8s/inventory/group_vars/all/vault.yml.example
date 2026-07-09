@@ -1,0 +1,20 @@
+---
+# =====================================================================
+# PLANTILLA (sin cifrar) — solo para mostrar la estructura.
+#
+# NO uses este archivo en producción. Crea el real cifrado:
+#
+#   1) Genera un password fuerte:
+#        openssl rand -base64 32
+#
+#   2) Crea el vault cifrado y pega el password dentro:
+#        ansible-vault create group_vars/all/vault.yml
+#
+#   3) Dentro del editor que abre ansible-vault, escribe EXACTAMENTE
+#      la misma variable que abajo, con tu password generado.
+#
+# El vault REAL (group_vars/all/vault.yml) debe estar en .gitignore.
+# =====================================================================
+
+# Password de autenticación de Valkey (y de Sentinel, que reutiliza el mismo).
+vault_valkey_password: "REEMPLAZA_CON_LA_SALIDA_DE_openssl_rand_base64_32"

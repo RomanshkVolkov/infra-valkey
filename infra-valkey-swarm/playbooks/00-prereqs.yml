@@ -1,0 +1,70 @@
+---
+# =====================================================================
+# 00-prereqs.yml — Asegura Docker Engine, SDK Python y Swarm en cada VPS.
+# Corre POR HOST (cada VPS es independiente).
+# =====================================================================
+- name: "Prerrequisitos de Docker Swarm"
+  hosts: swarm_nodes
+  gather_facts: true
+  become: true
+  tasks:
+
+    - name: "Comprobar si docker ya está instalado"
+      ansible.builtin.command: "docker --version"
+      register: docker_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Instalar Docker Engine (script oficial) si falta"
+      # Único shell justificado: el instalador oficial no tiene módulo nativo.
+      # Idempotente por el `creates` + el `when`.
+      ansible.builtin.shell:
+        cmd: "curl -fsSL https://get.docker.com | sh"
+      args:
+        creates: "/usr/bin/docker"
+      when: docker_check.rc != 0
+
+    - name: "Asegurar el servicio docker activo y habilitado"
+      ansible.builtin.systemd_service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: "¿Está ya el SDK de Docker para Python?"
+      ansible.builtin.command: "python3 -c 'import docker'"
+      register: sdk_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Instalar SDK de Docker para Python (requerido por community.docker)"
+      # Solo si falta: así no peleamos con el lock de apt (unattended-upgrades)
+      # en VPS donde el SDK ya está instalado. lock_timeout espera el lock si
+      # de verdad hay que instalar.
+      ansible.builtin.apt:
+        name:
+          - python3-docker      # SDK que usan docker_swarm/docker_secret/...
+          - python3-yaml        # parseo del stack file
+        state: present
+        update_cache: true
+        lock_timeout: 180
+      register: sdk_apt
+      until: sdk_apt is succeeded
+      retries: 3
+      delay: 20
+      when:
+        - ansible_os_family == "Debian"
+        - sdk_check.rc != 0
+
+    - name: "Inicializar Swarm (idempotente)"
+      community.docker.docker_swarm:
+        state: present
+        # Fallback a node_ip si swarm_advertise_addr está vacío en config.yml.
+        # (No-op si el swarm ya está activo.)
+        advertise_addr: "{{ swarm_advertise_addr | default(node_ip, true) }}"
+      register: swarm_init
+
+    - name: "Mostrar estado del Swarm"
+      ansible.builtin.debug:
+        msg: >-
+          Swarm en {{ inventory_hostname }}:
+          {{ 'inicializado/activo' if swarm_init is succeeded else 'ERROR' }}.

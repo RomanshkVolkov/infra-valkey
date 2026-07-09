@@ -1,0 +1,23 @@
+---
+# =====================================================================
+# Defaults del role app-ejemplo. Sobreescribibles desde group_vars.
+# =====================================================================
+
+# Namespaces (deben coincidir con los del role valkey)
+valkey_namespace: "data"
+apps_namespace: "production"
+
+# Secret de auth a replicar de `data` -> `production`
+valkey_auth_secret_name: "valkey-auth"
+valkey_auth_secret_key: "valkey-password"
+
+# Conexión a Valkey vía Sentinel (DNS interno, derivado del release + namespace)
+valkey_master_set_name: "mymaster"
+valkey_release_name: "valkey"
+valkey_sentinel_addr: "{{ valkey_release_name }}.{{ valkey_namespace }}.svc.cluster.local:26379"
+
+# Imagen de la app (FIJA por tag/digest; se publica fuera del playbook)
+app_image: "registry.example.com/app-ejemplo:1.0.0"
+app_name: "app-ejemplo"
+app_replicas: 2
+app_container_port: 8080

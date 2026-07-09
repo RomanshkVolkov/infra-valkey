@@ -1,0 +1,76 @@
+---
+# =====================================================================
+# Role app-ejemplo — despliega la app de demo en `production`.
+# 1) Replica el Secret de auth desde `data`.
+# 2) Crea Deployment + Service.
+# =====================================================================
+
+- name: "Leer el Secret de auth desde el namespace `data`"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    kind: Secret
+    namespace: "{{ valkey_namespace }}"
+    name: "{{ valkey_auth_secret_name }}"
+  register: src_secret
+  no_log: true
+
+- name: "Verificar que el Secret origen existe"
+  ansible.builtin.assert:
+    that:
+      - "src_secret.resources | length == 1"
+    fail_msg: >-
+      No existe el Secret {{ valkey_auth_secret_name }} en {{ valkey_namespace }}.
+      Ejecuta antes el playbook 10-valkey-deploy.yml.
+
+# ---------------------------------------------------------------------
+# Replicación del Secret a `production`.
+#
+# ALTERNATIVA (recomendada a escala): en vez de copiar a mano, usar
+# 'emberstack/reflector' (anotaciones reflector.v1.k8s.emberstack.com/...)
+# o 'external-secrets' para sincronizar Secrets entre namespaces de forma
+# declarativa. Aquí lo hacemos con read+create por simplicidad y cero deps.
+# ---------------------------------------------------------------------
+- name: "Replicar Secret de auth a `production`"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      type: Opaque
+      metadata:
+        name: "{{ valkey_auth_secret_name }}"
+        namespace: "{{ apps_namespace }}"
+      # Reutilizamos el .data (ya en base64) del Secret origen => idempotente
+      # y sin exponer el password en texto plano en ningún momento.
+      data: "{{ (src_secret.resources | first).data }}"
+  no_log: true
+
+- name: "Aplicar Deployment + Service de la app"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    namespace: "{{ apps_namespace }}"
+    # apply: true => server-side apply, idempotente y reconvergente.
+    apply: true
+    definition: "{{ lookup('template', 'deployment.yaml.j2') | from_yaml_all | list }}"
+
+- name: "Esperar a que el Deployment esté disponible"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    kind: Deployment
+    namespace: "{{ apps_namespace }}"
+    name: "{{ app_name }}"
+  register: app_dep
+  until: >-
+    (app_dep.resources | length == 1)
+    and ((app_dep.resources[0].status.availableReplicas | default(0)) >= app_replicas)
+  retries: 20
+  delay: 6
+
+- name: "Resumen de la app"
+  ansible.builtin.debug:
+    msg: >-
+      App '{{ app_name }}' desplegada en '{{ apps_namespace }}' con
+      {{ app_dep.resources[0].status.availableReplicas | default(0) }} réplicas.
+      Service: {{ app_name }}.{{ apps_namespace }}.svc.cluster.local:{{ app_container_port }}

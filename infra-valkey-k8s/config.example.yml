@@ -1,0 +1,103 @@
+---
+# =====================================================================
+# config.yml — ÚNICO archivo que necesitas editar para desplegar.
+#
+# Uso:
+#   1) make config        # copia esta plantilla a group_vars/all/config.yml
+#   2) edita group_vars/all/config.yml (este mismo contenido) con tus valores
+#   3) make deploy         # despliega TODO con un solo comando
+#
+# Para desplegar SOLO Valkey (lo normal) basta con tocar los 2 campos
+# marcados [OBLIGATORIO]. El resto tiene valores por defecto razonables.
+# =====================================================================
+
+# ---- Conexión al nodo (SSH) -----------------------------------------
+# Solo se usa para tareas que corren EN el nodo (copiar kubeconfig / instalar
+# helm en el nodo). Si despliegas laptop→API con un kubeconfig que ya funciona,
+# SSH casi no se usa. La autenticación va por tu ssh-agent / ~/.ssh/config.
+#
+# Opción A (recomendada si ya tienes un Host en ~/.ssh/config que funciona):
+#   node_ssh_alias: "mi-nodo"   # usa ese Host tal cual (HostName/Port/User/clave)
+node_ssh_alias: ""
+#
+# Opción B (conexión explícita; ignorada si pones node_ssh_alias):
+node_ip: "203.0.113.10"                 # IP del nodo
+node_ssh_port: 22                        # puerto SSH (¡cámbialo si no es el 22!)
+node_user: "root"                        # usuario SSH
+
+# ---- Kubeconfig en TU laptop ----------------------------------------
+# Ruta donde se guardará el kubeconfig.
+#   - Si NO tienes kubeconfig aún: `make deploy` lo copia del nodo y reescribe
+#     el `server:` con node_ip automáticamente (no lo hagas a mano).
+#   - Si YA tienes uno que funciona (porque ya usas el clúster), apúntalo aquí
+#     (p.ej. "~/.kube/config"): el paso de copia se salta solo.
+kubeconfig: "~/.kube/k3s-valkey.yaml"
+
+# Solo si tu clúster NO es k3s (ruta del kubeconfig EN el nodo). Por defecto la
+# de k3s. Ignóralo si ya tienes kubeconfig local (no se usa).
+# node_kubeconfig_src: "/etc/rancher/k3s/k3s.yaml"
+
+# ---- Namespaces -----------------------------------------------------
+# valkey_namespace: dónde vive Valkey. El Service queda en
+#   valkey.<valkey_namespace>.svc.cluster.local (6379 datos / 26379 sentinel).
+# apps_namespace: el namespace de TUS apps que consumen la caché. La
+#   NetworkPolicy permite llegar a Valkey SOLO desde este namespace.
+#   ¿Despliegas en "default"? Pon  apps_namespace: "default".
+valkey_namespace: "data"
+apps_namespace: "production"
+
+# ---- App de ejemplo (OPCIONAL, desactivada por defecto) -------------
+# Demo de cache-aside (Go). NO es necesaria para usar Valkey: actívala solo
+# si quieres ver el patrón funcionando. Si la activas, app_image pasa a ser
+# obligatorio (debes haber construido y publicado la imagen, ver app-ejemplo/).
+deploy_app_ejemplo: false
+app_image: "registry.example.com/app-ejemplo:1.0.0"  # solo si deploy_app_ejemplo: true
+app_replicas: 2
+
+# ---- Valkey ---------------------------------------------------------
+# Verifica versiones reales con: helm search repo bitnami/valkey --versions
+valkey_chart_version: "3.0.20"
+# Bitnami retiró las imágenes "free" de docker.io/bitnami/* en 2025 (dan 404).
+# Ponlo a true para usar bitnamilegacy/* (mismas imágenes, sin actualizaciones).
+# Compruébalo: si `helm show values bitnami/valkey --version X` apunta a
+# bitnami/* y el pull falla, actívalo.
+valkey_use_bitnamilegacy: true
+
+# Caché por instancia, en MB. OJO: es REPLICACIÓN, no sharding — los 3 pods
+# guardan los MISMOS datos, así que esto es tu caché útil TOTAL (no se suma).
+# El límite de memoria del pod se DERIVA solo de este número (~1.3x), así que
+# solo tienes que tocar esto y nunca habrá OOM por incoherencia.
+#
+# RAM total que consume Valkey ≈ 3 pods x (valkey_maxmemory_mb x 1.3).
+# Valores promedio recomendados según la RAM del nodo (dejando holgura para
+# el SO/k3s y picos de otras cargas). Ajusta a tu uso real:
+#
+#   RAM nodo | valkey_maxmemory_mb | caché útil | RAM total 3 pods | libre aprox
+#   ---------+---------------------+------------+------------------+------------
+#     4 GB   |         500         |   ~0.5 GB  |     ~1.9 GB      |   ~2 GB
+#     8 GB   |        1000         |   ~1   GB  |     ~3.8 GB      |   ~4 GB
+#    16 GB   |        2000         |   ~2   GB  |     ~7.6 GB      |   ~8 GB
+#    24 GB   |        3000         |   ~3   GB  |    ~11.4 GB      |  ~12 GB
+#    32 GB   |        4000         |   ~4   GB  |    ~15.2 GB      |  ~16 GB
+#    48 GB   |        6000         |   ~6   GB  |    ~22.9 GB      |  ~25 GB
+#    64 GB   |        8000         |   ~8   GB  |    ~30.5 GB      |  ~33 GB
+#
+# "libre aprox" no descuenta lo que ya usen otras cargas: resta tu baseline
+# (p.ej. ~5 GB) de esa columna para saber el margen real para picos.
+valkey_maxmemory_mb: 3000                # nodo de 24 GB (ver tabla de arriba)
+
+# Password de Valkey/Sentinel.
+#   - Déjalo VACÍO ("") para que se autogenere uno fuerte la primera vez
+#     (se guarda en .valkey_password, gitignored, y se reutiliza). RECOMENDADO.
+#   - O pon tu propio password si prefieres controlarlo.
+valkey_password: ""
+
+# ---- Toggles avanzados (raro tener que cambiarlos) ------------------
+# helm corre en TU laptop (controlador) hablando con la API. Déjalo en true.
+# Ponlo a false solo si quieres que Ansible instale helm EN el nodo por SSH
+# (modelo "ejecutar en el nodo", requiere la lib python kubernetes en el nodo).
+helm_on_controller: true
+# "soft" en nodo único; "hard" SOLO con >=3 nodos worker reales.
+valkey_pod_anti_affinity_preset: "soft"
+# true solo si tienes kube-prometheus-stack instalado (crea ServiceMonitor).
+prometheus_operator_installed: false

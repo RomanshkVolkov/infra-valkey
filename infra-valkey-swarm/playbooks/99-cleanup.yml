@@ -1,0 +1,36 @@
+---
+# =====================================================================
+# 99-cleanup.yml — Desinstala Valkey de cada VPS (stack + secret).
+# Idempotente: no falla si ya no existen. Sin volúmenes que limpiar.
+#
+#   ansible-playbook playbooks/99-cleanup.yml     (o: make clean)
+# =====================================================================
+- name: "Desinstalar Valkey de Docker Swarm"
+  hosts: swarm_nodes
+  gather_facts: false
+  become: true
+  tasks:
+    - name: "Borrar el stack de Valkey (docker stack rm)"
+      # CLI en vez del módulo para no depender de `jsondiff` en el host.
+      ansible.builtin.command:
+        cmd: "docker stack rm {{ valkey_stack_name }}"
+      register: stack_rm
+      changed_when: "'Removing' in (stack_rm.stderr | default('')) or stack_rm.rc == 0"
+      failed_when: stack_rm.rc != 0 and 'not found' not in (stack_rm.stderr | default(''))
+
+    - name: "Esperar a que el servicio desaparezca"
+      community.docker.docker_swarm_service_info:
+        name: "{{ valkey_stack_name }}_{{ valkey_service_name }}"
+      register: svc
+      until: svc.service is none
+      retries: 15
+      delay: 3
+
+    - name: "Borrar el Docker secret del password"
+      community.docker.docker_secret:
+        name: "{{ valkey_secret_name }}"
+        state: absent
+
+    - name: "Resumen"
+      ansible.builtin.debug:
+        msg: "Valkey desinstalado en {{ inventory_hostname }} (stack y secret eliminados)."

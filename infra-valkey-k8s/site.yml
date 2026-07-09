@@ -1,0 +1,18 @@
+---
+# =====================================================================
+# site.yml — Despliegue COMPLETO en un solo comando.
+#
+#   ansible-playbook site.yml        (o, más simple: `make deploy`)
+#
+# Encadena, en orden, todas las fases. Cada una es idempotente, así que
+# puedes re-ejecutar este playbook tantas veces como quieras.
+#
+# Requisitos previos (los hace `make setup` y `make config`):
+#   - .venv + collection kubernetes.core instalados.
+#   - group_vars/all/config.yml creado y editado (IP, clave, imagen...).
+# =====================================================================
+- import_playbook: playbooks/00-prereqs.yml          # Helm en el nodo + repo Bitnami
+- import_playbook: playbooks/05-fetch-kubeconfig.yml  # trae el kubeconfig al laptop
+- import_playbook: playbooks/10-valkey-deploy.yml     # Valkey + Sentinel + NetworkPolicy
+- import_playbook: playbooks/20-app-deploy.yml        # app de ejemplo
+- import_playbook: playbooks/99-verify.yml            # verificación post-deploy

@@ -1,0 +1,9 @@
+---
+# =====================================================================
+# site.yml — Despliegue COMPLETO en un comando (`make deploy`).
+# Encadena prereqs + deploy + verificación. Todo idempotente.
+# Se aplica a TODOS los hosts de swarm_nodes en paralelo (cada uno su Valkey).
+# =====================================================================
+- import_playbook: playbooks/00-prereqs.yml        # Docker + SDK + Swarm en el VPS
+- import_playbook: playbooks/10-valkey-deploy.yml   # secret + stack de Valkey
+- import_playbook: playbooks/99-verify.yml          # PONG + maxmemory-policy

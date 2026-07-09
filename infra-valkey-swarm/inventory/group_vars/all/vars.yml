@@ -1,0 +1,40 @@
+---
+# =====================================================================
+# Constantes internas / derivadas. NO edites esto para un despliegue
+# normal: lo común vive en inventory/group_vars/all/config.yml.
+# =====================================================================
+
+# ---- Password de Valkey (derivado de config.yml) --------------------
+# Si `valkey_password` está vacío, se autogenera la primera vez y se guarda
+# en .valkey_password (gitignored, raíz del repo), reutilizándose después.
+# Solo letras y dígitos para no romper valkey-cli ni el secret de Swarm.
+vault_valkey_password: >-
+  {{ valkey_password
+     if (valkey_password | default('') | trim | length > 0)
+     else lookup('ansible.builtin.password',
+                 inventory_dir ~ '/../.valkey_password length=32 chars=ascii_letters,digits') }}
+
+# ---- Stack / red ----------------------------------------------------
+valkey_stack_name: "cache"               # => servicio: cache_valkey
+valkey_service_name: "valkey"
+valkey_network_name: "valkey_net"
+valkey_port: 6379
+
+# ---- Secret de Docker Swarm -----------------------------------------
+valkey_secret_name: "valkey_password"
+
+# ---- Memoria / política (derivado de valkey_maxmemory_mb en config) -
+valkey_maxmemory: "{{ valkey_maxmemory_mb | default(512) }}mb"
+valkey_maxmemory_policy: "allkeys-lru"
+# Límite del contenedor ~1.3x maxmemory (overhead/fragmentación); reserva ~0.5x.
+valkey_mem_limit: "{{ (valkey_maxmemory_mb | default(512) | float * 1.3) | round(0, 'ceil') | int }}M"
+valkey_mem_reservation: "{{ (valkey_maxmemory_mb | default(512) | float * 0.5) | round(0, 'ceil') | int }}M"
+valkey_cpu_limit: "0.5"
+valkey_cpu_reservation: "0.1"
+
+# ---- Espera de readiness en verify ----------------------------------
+valkey_wait_retries: 30
+valkey_wait_delay: 5
+
+# Ruta donde se renderiza el stack file EN EL HOST.
+valkey_stack_file_remote: "/etc/valkey-swarm/{{ valkey_stack_name }}-stack.yml"

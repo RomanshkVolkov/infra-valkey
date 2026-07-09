@@ -1,0 +1,109 @@
+---
+# =====================================================================
+# Role valkey — despliega Valkey (replicación + Sentinel) en `data`.
+# Todas las tareas son idempotentes (state: present + helm reconvergente).
+# =====================================================================
+
+- name: "Crear namespace de datos ({{ valkey_namespace }})"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ valkey_namespace }}"
+        labels:
+          # Etiqueta usada por NetworkPolicies / selección por namespace.
+          name: "{{ valkey_namespace }}"
+
+- name: "Crear namespace de apps ({{ apps_namespace }})"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ apps_namespace }}"
+        labels:
+          # IMPRESCINDIBLE: la NetworkPolicy permite ingress desde namespaces
+          # con esta etiqueta. Sin ella, el tráfico de la app quedaría bloqueado.
+          name: "{{ apps_namespace }}"
+
+- name: "Crear/actualizar Secret de auth de Valkey"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      type: Opaque
+      metadata:
+        name: "{{ valkey_auth_secret_name }}"
+        namespace: "{{ valkey_namespace }}"
+      # stringData deja que k8s codifique en base64; el password viene del vault.
+      # Construimos el dict en una sola expresión Jinja porque Ansible NO templa
+      # las CLAVES de un mapping escritas como "{{ var }}:" (llegarían literales).
+      stringData: "{{ { valkey_auth_secret_key: vault_valkey_password } }}"
+  # No mostrar el contenido en logs aunque se ejecute con -v.
+  no_log: true
+
+- name: "Renderizar values del chart a archivo temporal"
+  ansible.builtin.template:
+    src: "valkey-values.yaml.j2"
+    dest: "{{ valkey_values_tmp }}"
+    mode: "0600"     # contiene referencias de config (no el password, pero 0600 por higiene)
+
+- name: "Instalar/actualizar Valkey vía Helm (versión fija)"
+  kubernetes.core.helm:
+    kubeconfig: "{{ kubeconfig }}"
+    name: "{{ valkey_release_name }}"
+    chart_ref: "{{ valkey_chart_name }}"
+    chart_version: "{{ valkey_chart_version }}"   # pinning explícito
+    release_namespace: "{{ valkey_namespace }}"
+    create_namespace: false                       # ya lo creamos arriba
+    values_files:
+      - "{{ valkey_values_tmp }}"
+    # wait=false aquí: la espera real la hacemos con k8s_info abajo, que da
+    # control fino sobre qué consideramos "Ready" (pods + sentinels).
+    wait: false
+    # atomic evitaría dejar releases a medias en caso de fallo de timeout.
+    atomic: false
+
+- name: "Aplicar NetworkPolicy de Valkey"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    # Renderizada desde templates/ con los namespaces configurados en config.yml
+    # (valkey_namespace y apps_namespace). El propio manifiesto lleva su namespace.
+    definition: "{{ lookup('template', 'networkpolicy.yaml.j2') | from_yaml }}"
+
+- name: "Esperar a que los 3 pods de Valkey estén Ready (retry loop)"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    kind: Pod
+    namespace: "{{ valkey_namespace }}"
+    label_selectors:
+      - "app.kubernetes.io/name=valkey"
+  register: valkey_pods_wait
+  # Consideramos Ready cuando hay >=3 pods y todos tienen la condición Ready=True.
+  until: >-
+    (valkey_pods_wait.resources | length) >= valkey_replica_count
+    and
+    (valkey_pods_wait.resources
+      | map(attribute='status.conditions', default=[])
+      | map('selectattr', 'type', 'equalto', 'Ready')
+      | map('selectattr', 'status', 'equalto', 'True')
+      | map('list') | map('length') | select('gt', 0) | list | length)
+      >= valkey_replica_count
+  retries: "{{ valkey_wait_retries }}"
+  delay: "{{ valkey_wait_delay }}"
+
+- name: "Resumen del despliegue de Valkey"
+  ansible.builtin.debug:
+    msg: >-
+      Valkey '{{ valkey_release_name }}' desplegado en '{{ valkey_namespace }}'
+      con {{ valkey_pods_wait.resources | length }} pods Ready.
+      Service interno: {{ valkey_release_name }}.{{ valkey_namespace }}.svc.cluster.local
+      (6379 datos / 26379 sentinel).
