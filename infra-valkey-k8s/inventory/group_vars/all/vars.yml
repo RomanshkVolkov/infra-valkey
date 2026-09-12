@@ -49,11 +49,15 @@ valkey_maxmemory_policy: "allkeys-lru"
 
 valkey_resources:
   requests:
-    cpu: "100m"
+    cpu: "{{ valkey_cpu_request }}"
     # ~50% de maxmemory como reserva inicial.
     memory: "{{ (valkey_maxmemory_mb | default(700) | float * 0.5) | round(0, 'ceil') | int }}Mi"
   limits:
-    cpu: "500m"
+    # Ajustable desde config.yml, y conviene no apretarlo: el límite de CPU se
+    # aplica por ventanas de 100 ms, así que agotar la cuota **congela** el
+    # contenedor hasta la siguiente — con el reloj corriendo. Eso es lo que hace
+    # que una sonda con plazo corto no llegue a tiempo y deje huérfanos.
+    cpu: "{{ valkey_cpu_limit }}"
     # ~1.3x maxmemory: headroom para fragmentación y buffers de replicación.
     memory: "{{ (valkey_maxmemory_mb | default(700) | float * 1.3) | round(0, 'ceil') | int }}Mi"
 

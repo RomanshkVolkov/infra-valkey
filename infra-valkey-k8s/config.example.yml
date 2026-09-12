@@ -92,7 +92,31 @@ valkey_maxmemory_mb: 3000                # nodo de 24 GB (ver tabla de arriba)
 #   - O pon tu propio password si prefieres controlarlo.
 valkey_password: ""
 
+# CPU por pod. El `request` (100m) es lo que le garantiza sitio en el nodo; el
+# `limit` es el techo, y **conviene no apretarlo**.
+#
+# El límite se aplica por ventanas de 100 ms: si el contenedor agota su cuota a
+# mitad de ventana, el kernel lo congela hasta la siguiente. El reloj de pared,
+# mientras, sigue corriendo. Eso no se nota en una consulta a la caché, pero sí
+# en la sonda de readiness, que cada 5 segundos tiene que arrancar bash y un
+# `valkey-cli` y responder dentro de su plazo.
+#
+# Con `500m` eso fallaba de vez en cuando y cada fallo dejaba un proceso zombi
+# que ya nadie recoge (PID 1 del contenedor es `valkey-server`, no un init). En
+# un nodo real: 1.529 zombis en 103 días. Con `1000m` y el plazo de sonda que
+# trae el role, deja de pasar.
+#
+# Súbelo si el nodo va holgado; bájalo sólo si tienes que competir por CPU, y
+# entonces sube también `valkey_probe_timeout_seconds`.
+valkey_cpu_limit: "1000m"
+
 # ---- Toggles avanzados (raro tener que cambiarlos) ------------------
+# Plazo de las sondas de readiness/liveness, en segundos. El defecto del chart
+# para readiness es 1, que es corto: ver la nota de valkey_cpu_limit.
+valkey_probe_timeout_seconds: 5
+# El contenedor `pause` pasa a ser PID 1 del pod y recoge los huérfanos que
+# dejen las sondas. Es el arreglo de raíz al problema de los zombis.
+valkey_share_process_namespace: true
 # helm corre en TU laptop (controlador) hablando con la API. Déjalo en true.
 # Ponlo a false solo si quieres que Ansible instale helm EN el nodo por SSH
 # (modelo "ejecutar en el nodo", requiere la lib python kubernetes en el nodo).

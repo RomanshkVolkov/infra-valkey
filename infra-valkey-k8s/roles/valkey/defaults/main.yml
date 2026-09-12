@@ -34,6 +34,22 @@ valkey_master_set_name: "mymaster"
 valkey_maxmemory_mb: 700
 valkey_maxmemory_policy: "allkeys-lru"
 
+# Sondas. El chart le da a readiness sólo 1 segundo, y con un límite de CPU ese
+# plazo se agota estrangulado: el `valkey-cli` queda huérfano y, como PID 1 del
+# contenedor es `valkey-server` y no recoge a nadie, se vuelve zombi para
+# siempre. Ver el comentario largo en `templates/valkey-values.yaml.j2`.
+valkey_probe_timeout_seconds: 5
+# CPU por pod. El request es lo que garantiza sitio; el límite es el techo.
+valkey_cpu_request: "100m"
+valkey_cpu_limit: "1000m"
+# El sentinel aparte: su preset del chart trae 150m, que se queda corto (ver la
+# nota en templates/valkey-values.yaml.j2).
+valkey_sentinel_cpu_request: "100m"
+valkey_sentinel_cpu_limit: "500m"
+# Pone al contenedor `pause` como PID 1 del pod, que sí recoge huérfanos. Es el
+# arreglo de raíz; el plazo de arriba sólo quita el disparador.
+valkey_share_process_namespace: true
+
 # Disponibilidad
 valkey_pod_anti_affinity_preset: "soft"   # "hard" solo con >=3 nodos reales
 valkey_pdb_min_available: 1

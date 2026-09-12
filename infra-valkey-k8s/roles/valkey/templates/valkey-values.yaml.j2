@@ -52,6 +52,34 @@ sentinel:
   quorum: {{ valkey_sentinel_quorum }}
   # Tiempo sin respuesta del master antes de considerarlo caído (ms).
   downAfterMilliseconds: {{ valkey_sentinel_down_after_ms }}
+  # El sentinel viene con un preset diminuto del chart: 150m de techo. Medido en
+  # dwit_kb el 12-sep-2026, con eso se pasaba **el 36,7% de los ciclos
+  # congelado** (8.834 de 24.092), contra el 0,7% del contenedor de valkey.
+  #
+  # No es cosmético: el sentinel es quien detecta un primary caído y dispara el
+  # failover. Un proceso que no corre un tercio del tiempo tarda de más en
+  # decidir, y con `downAfterMilliseconds` de por medio eso se paga en un corte
+  # más largo o en un failover que no tocaba.
+  #
+  # Sólo se sube la CPU: memoria y almacenamiento efímero se dejan como los
+  # ponía el preset, para cambiar una cosa y no tres.
+  resources:
+    requests:
+      cpu: "{{ valkey_sentinel_cpu_request }}"
+      memory: "128Mi"
+      ephemeral-storage: "50Mi"
+    limits:
+      cpu: "{{ valkey_sentinel_cpu_limit }}"
+      memory: "192Mi"
+      ephemeral-storage: "2Gi"
+
+  # Mismo plazo que en la réplica, y por el mismo motivo: el sentinel corre su
+  # propia sonda (`ping_sentinel.sh`).
+  readinessProbe:
+    timeoutSeconds: {{ valkey_probe_timeout_seconds }}
+  livenessProbe:
+    timeoutSeconds: {{ valkey_probe_timeout_seconds }}
+
   # El Service que agrupa los pods expone también 26379 (sentinel),
   # de modo que valkey.data.svc.cluster.local:26379 es el endpoint sentinel.
   service:
@@ -74,6 +102,37 @@ replica:
     limits:
       cpu: "{{ valkey_resources.limits.cpu }}"
       memory: "{{ valkey_resources.limits.memory }}"
+
+  # ---- Sondas: por qué NO se dejan en el defecto del chart ----------
+  #
+  # El chart le da a readiness `timeoutSeconds: 1` (a liveness le da 5). En ese
+  # segundo la sonda tiene que bifurcar `sh`, luego bash, leer el fichero de la
+  # contraseña, bifurcar `timeout` y bifurcar `valkey-cli` — y que ése cargue,
+  # conecte, autentique y responda. Con un límite de CPU el kernel congela el
+  # contenedor en cuanto agota su cuota dentro de la ventana de 100 ms, pero el
+  # reloj del segundo sigue corriendo.
+  #
+  # Cuando el plazo vence, muere el padre y el `valkey-cli` queda huérfano. Se
+  # reengancha al PID 1 del contenedor, que es `valkey-server` — una base de
+  # datos, no un init: nunca llama a `wait()`. El huérfano se queda `<defunct>`
+  # para siempre.
+  #
+  # Medido en dwit_kb el 12-sep-2026: **1.529 zombis** acumulados en 103 días
+  # sin reiniciar, contra sólo 11 de la sonda de liveness. Esa proporción de
+  # 139 a 1 es justo la diferencia de margen entre las dos sondas.
+  readinessProbe:
+    timeoutSeconds: {{ valkey_probe_timeout_seconds }}
+  livenessProbe:
+    timeoutSeconds: {{ valkey_probe_timeout_seconds }}
+
+  # Y el arreglo de raíz, que es independiente del plazo: con esto el PID 1 del
+  # pod pasa a ser el contenedor `pause`, que sí recoge huérfanos. Lo de arriba
+  # quita el disparador; esto quita la consecuencia.
+  #
+  # El precio: los contenedores del pod se ven los procesos entre sí, y ninguno
+  # es ya PID 1 en su namespace. Irrelevante para valkey y sentinel, que no
+  # dependen de eso para sus señales.
+  shareProcessNamespace: {{ valkey_share_process_namespace | bool | lower }}
 
   # Anti-afinidad entre pods de Valkey.
   #  - "soft": preferencia (no obligatorio). Necesario en NODO ÚNICO,
